@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<flashmediaencoder_profile>
+        <preset>
+                <name>localhost</name>
+                <description></description>
+        </preset>
+        <capture>
+                <video>
+                        <device>USB Video Device</device>
+                        <crossbar_input>0</crossbar_input>
+                        <frame_rate>30</frame_rate>
+                        <size>
+                                <width>320</width>
+                                <height>240</height>
+                        </size>
+                </video>
+                <audio>
+                        <device>USB Audio Device</device>
+                        <crossbar_input>0</crossbar_input>
+                        <sample_rate>22050</sample_rate>
+                        <channels>1</channels>
+                        <input_volume>85</input_volume>
+                </audio>
+        </capture>
+        <encode>
+                <video>
+                        <format>VP6</format>
+                        <datarate>300</datarate>
+                        <advanced>
+                                <keyframe_frequency>2seconds</keyframe_frequency>
+                                <quality>GoodQuality-GoodFramerate</quality>
+                                <noise_reduction>None</noise_reduction>
+                                <datarate_window>Medium</datarate_window>
+                                <cpu_usage>Dedicated</cpu_usage>
+                        </advanced>
+                </video>
+                <audio>
+                        <format>Mp3</format>
+                        <datarate>48</datarate>
+                </audio>
+        </encode>
+        <output>
+                <rtmp>
+                        <url>rtmp://localhost/directo/pruebas?id=0d3c89690c6d232d28e5c51bbddce0c1</url>
+                        <backup_url></backup_url>
+                        <stream>test</stream>
+                </rtmp>
+        </output>
+        <preview>
+                <video>
+                        <input>
+                                <zoom>100%</zoom>
+                        </input>
+                        <output>
+                                <zoom>100%</zoom>
+                        </output>
+                </video>
+                <audio></audio>
+        </preview>
+</flashmediaencoder_profile>
