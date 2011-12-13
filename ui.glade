@@ -462,7 +462,7 @@ Servidor FFServer</property>
                             <property name="can_focus">True</property>
                             <property name="invisible_char">•</property>
                             <property name="width_chars">30</property>
-                            <property name="text" translatable="yes" context="yes">video-online.izquierda-unida.es</property>
+                            <property name="text" translatable="yes" context="yes">video-online.test.es</property>
                             <property name="invisible_char_set">True</property>
                             <property name="primary_icon_activatable">False</property>
                             <property name="secondary_icon_activatable">False</property>
@@ -545,7 +545,7 @@ Servidor FFServer</property>
                             <property name="invisible_char">•</property>
                             <property name="activates_default">True</property>
                             <property name="width_chars">30</property>
-                            <property name="text" translatable="yes" context="yes">5f4hm</property>
+                            <property name="text" translatable="yes" context="yes">R5f4hm</property>
                             <property name="primary_icon_activatable">False</property>
                             <property name="secondary_icon_activatable">False</property>
                             <property name="primary_icon_sensitive">True</property>
