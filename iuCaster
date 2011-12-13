@@ -1,0 +1,284 @@
+#!/usr/bin/env python
+
+import os, threading, locale
+import shlex,subprocess
+import re
+import sys, fcntl, select
+import syslog
+import inspect
+from xml.etree import ElementTree as ET
+
+try:
+ 	import pygtk
+  	pygtk.require("2.0")
+except:
+  	pass
+try:
+	import gtk, gobject
+  	import gtk.glade
+except:
+	sys.exit(1)
+
+non_decimal = re.compile(r'[^\d.]+')
+gtk.gdk.threads_init()
+
+class Emite(threading.Thread):
+    """
+    Thread class
+    """
+        
+    def __init__(self,ventana,command):
+        """
+        Constructor, setting initial variables
+        """
+        self._stopevent = threading.Event()
+        self._sleepperiod = 0.1
+	self.encoding = locale.getpreferredencoding()
+	self.utf8conv = lambda x : unicode(x, self.encoding).encode('utf8')
+	self.ventana = ventana
+	self.command = command
+	self.procesos = []
+
+        threading.Thread.__init__(self, name="Emite")
+
+    def arranca_procesos(self):
+	i=0
+        comandos = self.command.split('|')
+        entrada = subprocess.PIPE
+        error = subprocess.PIPE
+	for comando in comandos:
+                self.procesos.append(subprocess.Popen(shlex.split(comando),stdin=entrada, stdout=subprocess.PIPE, stderr=error, close_fds=True))
+                entrada = self.procesos[i].stdout
+                i+=1
+		if i == len(comandos)-1 :
+		  error = subprocess.STDOUT
+
+	try:
+	  fcntl.fcntl(
+                self.procesos[0].stderr.fileno(),
+                fcntl.F_SETFL,
+                fcntl.fcntl(self.procesos[0].stderr.fileno(), fcntl.F_GETFL) | os.O_NONBLOCK,
+                )
+	  syslog.syslog("START: " + self.command)
+        except Exception :
+              syslog.syslog("ERROR arrancando " + self.command)
+
+    def para_procesos(self):
+	for proceso in self.procesos:
+	  if not proceso.poll():
+	    try:
+              proceso.kill()
+	    except Exception as (errno, strerror):
+	      syslog.syslog("ERROR matando procesos: " + strerror)
+ 
+    def run(self):
+        """
+        overload of threading.thread.run()
+        main control loop
+        """
+        print "%s starts" % (self.getName(),)
+	print "--------> " + self.command
+
+	self.ventana.status.push(0,"Comenzando Emision...")
+	self.arranca_procesos()
+	reo = re.compile("^frame=.+")
+	rearranque = False
+	parado = False
+	tiempo_espera = 5
+
+	self.ventana.wTree.get_widget("imagen_estado_error").set_visible(False)
+        self.ventana.wTree.get_widget("imagen_estado_aviso").set_visible(True)
+
+        while not self._stopevent.isSet():
+		# Comprueba si los procesos siguen corriendo
+		for proceso in self.procesos:
+			if proceso.poll() or proceso.returncode != None:
+			  if rearranque:
+			    self.ventana.status.push(0,"El stream se ha caido... rearrancando...")
+			    self.ventana.wTree.get_widget("imagen_estado_aviso").set_visible(True)
+                            self.ventana.wTree.get_widget("imagen_estado_ok").set_visible(False)
+			    syslog.syslog("ERROR: stream caido!!!")
+			    rearranque = False
+			    self.para_procesos()
+			    self.procesos = []
+			    self.arranca_procesos()
+			  elif not parado:
+			    if tiempo_espera > 0:
+			      self._stopevent.wait(1)
+                              tiempo_espera -= 1
+                              self.ventana.status.push(0,"Esperando al rearranque...")
+			    else:
+			      self.ventana.status.push(0,"ERROR: Ha ocurrido un error en el stream")
+			      syslog.syslog("ERROR: stream parado!!!")
+			      self.ventana.wTree.get_widget("imagen_estado_error").set_visible(True)
+			      self.ventana.wTree.get_widget("imagen_estado_aviso").set_visible(False)
+			      self.para_procesos()
+			      parado = True
+			  
+		#linea = self.procesos[-1].stdout.read(64).strip()
+		#if linea:
+		#  print "-----------> Tenemos linea!!! " + linea
+		#  self.ventana.status.push(0,linea)
+
+		# Vuelca la salida de error del proceso primero
+		try:
+		  readx = select.select([self.procesos[0].stderr.fileno()], [], [])[0]
+                  if readx:
+			chunk = self.procesos[0].stderr.read()
+			if chunk != '':
+			  if reo.match(chunk):
+			    self.ventana.status.push(0,chunk)
+			    rearranque = True
+			    tiempo_espera = 5
+			    self.ventana.wTree.get_widget("imagen_estado_aviso").set_visible(False)
+			    self.ventana.wTree.get_widget("imagen_estado_ok").set_visible(True)
+			  else:
+			    self.ventana.salida.get_buffer().insert_at_cursor(chunk)
+			    self.ventana.salida.scroll_to_mark(self.ventana.salida.get_buffer().get_insert(), 0.1)
+		except Exception :
+                  syslog.syslog("ERROR leyendo respuesta de procesos.")
+
+		self._stopevent.wait(self._sleepperiod)
+    
+	self.ventana.wTree.get_widget("imagen_estado_error").set_visible(True)
+	self.ventana.wTree.get_widget("imagen_estado_aviso").set_visible(False)
+	self.ventana.wTree.get_widget("imagen_estado_ok").set_visible(False)
+ 
+	self.ventana.status.push(0,"Emision Terminada") 
+	syslog.syslog("END")
+        print "%s ends" % (self.getName(),)
+	self.procesos = []
+	del self
+
+    def stop(self):
+        """
+        Stop the thread
+        """
+	print "%s ending..." % (self.getName(),)
+	self._stopevent.set()
+	self.para_procesos()
+        self.join()
+
+class EmisorGTK:
+	"""This the GTK application"""
+
+	def __init__(self):
+		
+		#Set the Glade file
+		self.gladefile = "/usr/local/bin/emisor/ui.glade"  
+	        self.wTree = gtk.glade.XML(self.gladefile) 
+		self.salida = self.wTree.get_widget("salida")
+		self.status = self.wTree.get_widget("statusbar")
+		self.flash_url = "rtmp://localhost/live"
+		self.flash_stream = "test"
+		
+		#Create our dictionay and connect it
+		dic = { "on_selector_desde_changed" : self.selector_desde,
+			"on_selector_hacia_changed" : self.selector_hacia,
+			"on_hacia_flash_fichero_selection_changed" : self.fichero_xml,
+			"on_number_changed" : self.cambio_numero,
+			#"on_desde_mms_url_changed" : self.comprueba_url,
+			"on_emisor_close" : gtk.main_quit,
+			"on_btn_start_clicked" : self.comenzar_emision,
+			"on_btn_stop_clicked" : self.terminar_emision,
+			"on_btn_salir_clicked" : gtk.main_quit}
+		self.wTree.signal_autoconnect(dic)
+
+	def selector_desde(self, widget):
+		if widget.get_active_text() == "Camara DV":
+                  self.wTree.get_widget("caja_desde_mms").set_visible(False)
+		  self.wTree.get_widget("caja_desde_fichero").set_visible(False)
+		elif widget.get_active_text() == "Video Local":
+		  self.wTree.get_widget("caja_desde_mms").set_visible(False)
+		  self.wTree.get_widget("caja_desde_fichero").set_visible(True)
+                else:
+		  self.wTree.get_widget("caja_desde_fichero").set_visible(False)
+		  self.wTree.get_widget("caja_desde_mms").set_visible(True)
+
+	def selector_hacia(self, widget):
+		if widget.get_active_text() == "Servidor Flash":
+		  self.wTree.get_widget("caja_hacia_sout").set_visible(False)
+		  self.wTree.get_widget("caja_hacia_flash").set_visible(True)
+		else:
+		  self.wTree.get_widget("caja_hacia_sout").set_visible(True)
+                  self.wTree.get_widget("caja_hacia_flash").set_visible(False)
+
+        #def comprueba_url(self, widget):
+        
+	def cambio_numero(self, widget):
+		valor = non_decimal.sub('', widget.get_text())
+		widget.set_text(valor)
+
+	def fichero_xml(self, widget):
+		try:
+			tree = ET.parse(widget.get_filename())
+			self.flash_url = tree.find("output").find("rtmp").find("url").text
+			self.flash_stream = tree.find("output").find("rtmp").find("stream").text
+                        if tree.find("output").find("rtmp").find("token") is not None:
+                          self.flash_token = tree.find("output").find("rtmp").find("token").text
+                        else:
+                          self.flash_token = ''
+			self.status.push(0,self.flash_url + "/" + self.flash_stream)
+			self.wTree.get_widget("hacia_flash_etiqueta").set_label(self.flash_url + "/" + self.flash_stream)
+		except Exception, inst:
+			self.status.push(0,"Error leyendo fichero XML")
+			syslog.syslog("ERROR leyendo fichero XML " + widget.get_filename())
+
+	def comenzar_emision(self, widget):
+	
+		if self.wTree.get_widget("selector_desde").get_active_text() == "Camara DV":
+			comando = 'dvgrab --format raw - | '
+			origen = '-'
+		elif self.wTree.get_widget("selector_desde").get_active_text() == "Video Local":
+			comando = ''
+			origen = self.wTree.get_widget("desde_fichero").get_filename()
+		else:
+			comando = ''
+			origen = 'mmsh://' + self.wTree.get_widget("desde_mms_url").get_text()
+
+		comando += 'ffmpeg -i ' + origen + ' -ar 11025 '
+		if self.wTree.get_widget("info_alta_compresion").get_active():
+			comando += '-s 320x240 -b 152k -maxrate 200k -bufsize 1835k '
+		else:
+			comando += '-b 256k -maxrate 300k  -bufsize 1835k '
+		comando += '-g 12 -cmp 2 -subcmp 2 -mbd 2 '
+
+		if self.wTree.get_widget("selector_hacia").get_active_text() == "Servidor Shoutcast":
+			comando += '-acodec libvorbis -f ogg - | oggfwd '
+			if self.wTree.get_widget("info_titulo").get_text() != "":
+				comando += '-n "' + self.wTree.get_widget("info_titulo").get_text() + '" '
+			if self.wTree.get_widget("info_descripcion").get_text() != "":
+				comando += '-d "' + self.wTree.get_widget("info_descripcion").get_text() + '" '
+			if self.wTree.get_widget("info_url").get_text() != "":
+				comando += '-u "' + self.wTree.get_widget("info_url").get_text() + '" '
+			comando += self.wTree.get_widget("hacia_sout_server").get_text() + ' '
+			comando += self.wTree.get_widget("hacia_sout_port").get_text() + ' '
+			comando += self.wTree.get_widget("hacia_sout_pass").get_text() + ' '
+			comando += '/' + self.wTree.get_widget("hacia_sout_canal").get_text() + ' '
+		elif self.wTree.get_widget("selector_hacia").get_active_text() == "Servidor FFServer":
+			comando += ' -y -re http://' 
+			#comando += self.wTree.get_widget("hacia_sout_user").get_text() + "@" + self.wTree.get_widget("hacia_sout_pass").get_text() + ":"
+			comando += self.wTree.get_widget("hacia_sout_server").get_text() + ":"
+			comando += self.wTree.get_widget("hacia_sout_port").get_text() + '/' + self.wTree.get_widget("hacia_sout_canal").get_text()
+		else:
+			comando += ' -acodec libmp3lame -vcodec flv -f flv ' 
+			comando += '"' + self.flash_url + "/" + self.flash_stream
+                        if self.flash_token != '':
+			  comando += ' token=' + self.flash_token
+                        comando += '"'
+
+		self.emision = Emite(self,comando)
+		self.emision.start()
+		self.wTree.get_widget("btn_start").set_sensitive(False)
+                self.wTree.get_widget("btn_stop").set_sensitive(True)
+
+	def terminar_emision(self, widget):
+
+		self.emision.stop()
+		self.wTree.get_widget("btn_start").set_sensitive(True)
+		self.wTree.get_widget("btn_stop").set_sensitive(False)
+
+
+if __name__ == "__main__":
+	hwg = EmisorGTK()
+	gtk.main()
